@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "persistent-data-layer"
+version = "1.0.0"
+description = "A robust, multi-engine Persistent Data Layer implementing Repository and Unit of Work patterns in Python."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Antigravity Developer", email = "developer@example.com" }
+]
+dependencies = [
+    "pydantic>=2.0.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.19.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
