@@ -1,34 +1,60 @@
 """
-Vercel Serverless Entrypoint Handler for Multi-Engine Persistent Data Layer
+Vercel Serverless Entrypoint for Multi-Engine Persistent Data Layer
 """
 
 import sys
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from contextlib import asynccontextmanager
 
-# Ensure project root directory is on sys.path
-root_dir = Path(__file__).resolve().parent.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
+# Ensure project root directory and api directory are on sys.path
+api_dir = Path(__file__).resolve().parent
+root_dir = api_dir.parent
+for d in [str(api_dir), str(root_dir)]:
+    if d not in sys.path:
+        sys.path.insert(0, d)
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from persistent_dal import (
-    MemoryRepository,
-    CachedRepository,
-    Specification,
-    FilterOperator,
-    SortOrder,
-    User,
-    Document,
-    AuditLog,
-    DataService,
-    UnitOfWork,
-)
+try:
+    from persistent_dal import (
+        MemoryRepository,
+        JSONFileRepository,
+        SQLiteRepository,
+        CachedRepository,
+        Specification,
+        FilterOperator,
+        SortOrder,
+        User,
+        Document,
+        AuditLog,
+        DataService,
+        UnitOfWork,
+    )
+except ImportError:
+    from api.persistent_dal import (
+        MemoryRepository,
+        JSONFileRepository,
+        SQLiteRepository,
+        CachedRepository,
+        Specification,
+        FilterOperator,
+        SortOrder,
+        User,
+        Document,
+        AuditLog,
+        DataService,
+        UnitOfWork,
+    )
+
+# Use writable /tmp directory for serverless environment
+TEMP_DIR = Path(tempfile.gettempdir())
+json_storage_path = TEMP_DIR / "dal_docs.json"
+sqlite_storage_path = TEMP_DIR / "dal_app.db"
 
 # Global in-memory storage repositories for serverless environment
 user_repo = MemoryRepository(User)
@@ -37,10 +63,13 @@ audit_repo = MemoryRepository(AuditLog)
 cached_user_repo = CachedRepository(user_repo, ttl_seconds=300)
 service = DataService(cached_user_repo, doc_repo, audit_repo)
 
+_initialized = False
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Seed initial demo data if empty
+
+async def ensure_seeded():
+    global _initialized
+    if _initialized:
+        return
     try:
         if await user_repo.count() == 0:
             u1 = await service.register_user("alex_rivera", "alex@company.com", "Alex Rivera", role="admin")
@@ -49,14 +78,14 @@ async def lifespan(app: FastAPI):
             await service.publish_document(doc.id, str(u1.id))
     except Exception as e:
         print(f"Seed error: {e}")
-    yield
+    finally:
+        _initialized = True
 
 
 app = FastAPI(
     title="Persistent Data Layer API",
     description="A multi-engine Data Access Layer implementing Repository, Unit of Work, Query Specification, and Caching patterns.",
-    version="1.0.0",
-    lifespan=lifespan
+    version="1.0.0"
 )
 
 app.add_middleware(
@@ -68,7 +97,6 @@ app.add_middleware(
 )
 
 
-# Request Pydantic Schemas
 class CreateUserRequest(BaseModel):
     username: str = Field(..., min_length=3)
     email: str
@@ -86,6 +114,7 @@ class CreateDocumentRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def home_dashboard():
     """HTML Dashboard Overview for Vercel deployment."""
+    await ensure_seeded()
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -107,8 +136,9 @@ async def home_dashboard():
                 <h1 class="display-4 fw-bold text-primary">Multi-Engine Persistent Data Layer</h1>
                 <p class="lead text-secondary">Enterprise Python DAL implementing Repository Pattern, Unit of Work, Query Specifications & Write-Through Caching.</p>
                 <div class="mt-3">
-                    <a href="/docs" class="btn btn-primary btn-lg me-2">Interactive API Docs (Swagger)</a>
-                    <a href="/api/stats" class="btn btn-outline-light btn-lg">View Data Layer Metrics</a>
+                    <a href="/docs" class="btn btn-primary btn-lg me-2">Interactive Swagger API Docs</a>
+                    <a href="/api/stats" class="btn btn-outline-light btn-lg me-2">View Data Layer Metrics</a>
+                    <a href="/api/demo" class="btn btn-success btn-lg">Run Live DAL Engines Demo</a>
                 </div>
             </div>
 
@@ -140,6 +170,7 @@ async def home_dashboard():
                 <h4 class="mb-3 text-white">Available API Endpoints</h4>
                 <ul class="list-group list-group-flush bg-transparent">
                     <li class="list-group-item bg-transparent text-light"><code>GET /api/stats</code> - System aggregated telemetry metrics</li>
+                    <li class="list-group-item bg-transparent text-light"><code>GET /api/demo</code> - Execute multi-engine live telemetry test</li>
                     <li class="list-group-item bg-transparent text-light"><code>GET /api/users</code> - List registered users with specification filtering</li>
                     <li class="list-group-item bg-transparent text-light"><code>POST /api/users</code> - Register a new user</li>
                     <li class="list-group-item bg-transparent text-light"><code>GET /api/documents</code> - Query documents specification</li>
@@ -158,12 +189,14 @@ async def home_dashboard():
 @app.get("/api/stats")
 async def get_stats():
     """Retrieve summary metrics across repositories."""
+    await ensure_seeded()
     return await service.get_summary_stats()
 
 
 @app.get("/api/cache-stats")
 async def get_cache_stats():
     """Retrieve caching hit/miss performance statistics."""
+    await ensure_seeded()
     return {
         "hits": cached_user_repo.hits,
         "misses": cached_user_repo.misses,
@@ -174,6 +207,7 @@ async def get_cache_stats():
 @app.get("/api/users")
 async def list_users(role: Optional[str] = None):
     """List users filtered by role using Specification query builder."""
+    await ensure_seeded()
     spec = Specification()
     if role:
         spec.add_filter("role", FilterOperator.EQ, role)
@@ -184,6 +218,7 @@ async def list_users(role: Optional[str] = None):
 @app.post("/api/users", status_code=201)
 async def create_user(payload: CreateUserRequest):
     """Register a new user entity."""
+    await ensure_seeded()
     try:
         user = await service.register_user(
             username=payload.username,
@@ -204,6 +239,7 @@ async def search_documents(
     offset: int = Query(default=0, ge=0)
 ):
     """Search documents using flexible specification query builder."""
+    await ensure_seeded()
     docs = await service.search_documents(query=query, status=status, limit=limit, offset=offset)
     return [d.to_dict() for d in docs]
 
@@ -211,6 +247,7 @@ async def search_documents(
 @app.post("/api/documents", status_code=201)
 async def create_document(payload: CreateDocumentRequest):
     """Create a new document."""
+    await ensure_seeded()
     doc = await service.create_document(
         author_id=payload.author_id,
         title=payload.title,
@@ -223,5 +260,36 @@ async def create_document(payload: CreateDocumentRequest):
 @app.get("/api/audits")
 async def get_audit_logs():
     """Retrieve system audit logs."""
+    await ensure_seeded()
     logs = await audit_repo.list_all()
     return [log.to_dict() for log in logs]
+
+
+@app.get("/api/demo")
+async def run_live_demo():
+    """Execute live multi-engine test scenario across SQLite, JSON File, and Memory stores."""
+    results = []
+
+    # 1. JSON File Engine in /tmp
+    json_repo = JSONFileRepository(Document, json_storage_path)
+    d1 = Document(title="Serverless Arch Spec", content="Vercel serverless DAL execution.", author_id="u_vc")
+    await json_repo.add(d1)
+    results.append({"engine": "JSONFileRepository", "path": str(json_storage_path), "doc_count": await json_repo.count()})
+
+    # 2. SQLite Engine in /tmp
+    sqlite_repo = SQLiteRepository(User, sqlite_storage_path)
+    u_sql = User(username="sqlite_user", email="sqlite@ver.cel", full_name="SQLite User")
+    await sqlite_repo.add(u_sql)
+    results.append({"engine": "SQLiteRepository", "path": str(sqlite_storage_path), "user_count": await sqlite_repo.count()})
+
+    # 3. Unit of Work Transaction
+    factories = {User: MemoryRepository(User), Document: MemoryRepository(Document)}
+    async with UnitOfWork(factories) as uow:
+        await uow.get_repository(User).add(User(username="uow_tx", email="tx@ver.cel", full_name="UoW User"))
+    results.append({"engine": "UnitOfWork", "transaction_committed": uow.committed})
+
+    return {
+        "status": "success",
+        "message": "All Multi-Engine Data Access Layer operations executed cleanly on Vercel.",
+        "engines_telemetry": results
+    }
