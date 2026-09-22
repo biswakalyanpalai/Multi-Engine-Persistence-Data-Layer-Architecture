@@ -9,7 +9,7 @@ import traceback
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-# Ensure project root directory and api directory are on sys.path
+# Add current api directory and project root to sys.path
 api_dir = Path(__file__).resolve().parent
 root_dir = api_dir.parent
 for d in [str(api_dir), str(root_dir)]:
@@ -36,7 +36,7 @@ try:
         DataService,
         UnitOfWork,
     )
-except Exception:
+except ImportError:
     from api.persistent_dal import (
         MemoryRepository,
         JSONFileRepository,
