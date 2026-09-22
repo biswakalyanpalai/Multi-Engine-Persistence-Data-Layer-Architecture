@@ -32,6 +32,7 @@ htmlcov/
 *.sqlite
 *.sqlite3
 *.json
+!vercel.json
 *.tmp
 *.log
 
