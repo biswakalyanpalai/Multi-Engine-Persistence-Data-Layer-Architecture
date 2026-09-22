@@ -1,5 +1,6 @@
 """
 Vercel Serverless Entrypoint for Multi-Engine Persistent Data Layer
+Provides full REST API and interactive Web UI Dashboard
 """
 
 import sys
@@ -100,7 +101,6 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler capturing runtime errors for diagnostic telemetry."""
     return JSONResponse(
         status_code=500,
         content={
@@ -128,7 +128,7 @@ class CreateDocumentRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def home_dashboard():
-    """HTML Dashboard Overview for Vercel deployment."""
+    """Interactive Web Dashboard UI demonstrating the Persistent Data Layer in real-time."""
     await ensure_seeded()
     html_content = """
     <!DOCTYPE html>
@@ -136,65 +136,392 @@ async def home_dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Multi-Engine Persistent Data Layer</title>
+        <title>Persistent Data Layer - Interactive Dashboard</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
         <style>
-            body { background: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-            .card { background: #1e293b; border: 1px solid #334155; color: #f8fafc; }
-            .badge-custom { background-color: #3b82f6; }
-            pre { background: #090d16; padding: 12px; border-radius: 6px; color: #38bdf8; }
+            :root { --bg-dark: #0f172a; --card-bg: #1e293b; --border-color: #334155; }
+            body { background-color: var(--bg-dark); color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+            .card { background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; color: #f8fafc; }
+            .nav-tabs .nav-link { color: #94a3b8; border: none; font-weight: 500; }
+            .nav-tabs .nav-link.active { color: #38bdf8; background: transparent; border-bottom: 3px solid #38bdf8; }
+            .btn-primary { background-color: #3b82f6; border: none; }
+            .btn-primary:hover { background-color: #2563eb; }
+            pre.telemetry-output { background: #090d16; border: 1px solid #1e293b; border-radius: 8px; color: #38bdf8; max-height: 250px; overflow-y: auto; font-size: 0.85rem; padding: 12px; }
+            .stat-badge { font-size: 1.5rem; font-weight: 700; color: #38bdf8; }
         </style>
     </head>
-    <body class="py-5">
+    <body class="py-4">
         <div class="container">
-            <div class="text-center mb-5">
-                <h1 class="display-4 fw-bold text-primary">Multi-Engine Persistent Data Layer</h1>
-                <p class="lead text-secondary">Enterprise Python DAL implementing Repository Pattern, Unit of Work, Query Specifications & Write-Through Caching.</p>
-                <div class="mt-3">
-                    <a href="/docs" class="btn btn-primary btn-lg me-2">Interactive Swagger API Docs</a>
-                    <a href="/api/stats" class="btn btn-outline-light btn-lg me-2">View Data Layer Metrics</a>
-                    <a href="/api/demo" class="btn btn-success btn-lg">Run Live DAL Engines Demo</a>
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom border-secondary">
+                <div>
+                    <h2 class="fw-bold text-primary mb-1"><i class="bi bi-layers-half me-2"></i>Persistent Data Layer Dashboard</h2>
+                    <p class="text-secondary mb-0">Multi-Engine Storage, Repository Pattern, Unit of Work & Write-Through Caching</p>
+                </div>
+                <div>
+                    <a href="/docs" target="_blank" class="btn btn-outline-info me-2"><i class="bi bi-file-code me-1"></i>Swagger API Docs</a>
+                    <button onclick="refreshDashboard()" class="btn btn-primary"><i class="bi bi-arrow-clockwise me-1"></i>Refresh Data</button>
                 </div>
             </div>
 
-            <div class="row g-4">
-                <div class="col-md-4">
-                    <div class="card h-100 p-4">
-                        <h3 class="h5 text-info">Repository Pattern</h3>
-                        <p class="text-secondary small">Generic Async Repository interface abstracting SQLite, File JSON, and In-Memory storage engines seamlessly.</p>
-                        <span class="badge badge-custom w-auto">AbstractRepository[T]</span>
+            <!-- Stats Bar -->
+            <div class="row g-3 mb-4">
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <span class="text-secondary small">Total Users</span>
+                        <div id="stat-users" class="stat-badge">-</div>
                     </div>
                 </div>
-                <div class="col-md-4">
-                    <div class="card h-100 p-4">
-                        <h3 class="h5 text-warning">Unit of Work (UoW)</h3>
-                        <p class="text-secondary small">Atomic transaction context manager for multi-repository state commit and automatic exception rollback.</p>
-                        <span class="badge bg-warning text-dark w-auto">UnitOfWork Context Manager</span>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <span class="text-secondary small">Total Documents</span>
+                        <div id="stat-docs" class="stat-badge">-</div>
                     </div>
                 </div>
-                <div class="col-md-4">
-                    <div class="card h-100 p-4">
-                        <h3 class="h5 text-success">Read/Write-Through Cache</h3>
-                        <p class="text-secondary small">Decorated caching layer providing automatic cache invalidation and hit/miss performance analytics.</p>
-                        <span class="badge bg-success w-auto">CachedRepository Tier</span>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <span class="text-secondary small">Cache Hit Ratio</span>
+                        <div id="stat-cache" class="stat-badge text-success">-</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <span class="text-secondary small">Audit Logs</span>
+                        <div id="stat-audits" class="stat-badge text-warning">-</div>
                     </div>
                 </div>
             </div>
 
-            <div class="mt-5 card p-4">
-                <h4 class="mb-3 text-white">Available API Endpoints</h4>
-                <ul class="list-group list-group-flush bg-transparent">
-                    <li class="list-group-item bg-transparent text-light"><code>GET /api/stats</code> - System aggregated telemetry metrics</li>
-                    <li class="list-group-item bg-transparent text-light"><code>GET /api/demo</code> - Execute multi-engine live telemetry test</li>
-                    <li class="list-group-item bg-transparent text-light"><code>GET /api/users</code> - List registered users with specification filtering</li>
-                    <li class="list-group-item bg-transparent text-light"><code>POST /api/users</code> - Register a new user</li>
-                    <li class="list-group-item bg-transparent text-light"><code>GET /api/documents</code> - Query documents specification</li>
-                    <li class="list-group-item bg-transparent text-light"><code>POST /api/documents</code> - Create new document</li>
-                    <li class="list-group-item bg-transparent text-light"><code>GET /api/audits</code> - Retrieve system audit logs</li>
-                    <li class="list-group-item bg-transparent text-light"><code>GET /api/cache-stats</code> - Caching hit/miss analytics</li>
-                </ul>
+            <!-- Main Tabs -->
+            <ul class="nav nav-tabs mb-4" id="mainTabs">
+                <li class="nav-item">
+                    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-users"><i class="bi bi-people me-1"></i>Users Repository</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-docs"><i class="bi bi-file-text me-1"></i>Document Specifications</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-uow"><i class="bi bi-cpu me-1"></i>Unit of Work (UoW)</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-engines"><i class="bi bi-database me-1"></i>Multi-Engine Live Test</button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+                <!-- TAB 1: USERS -->
+                <div class="tab-pane fade show active" id="tab-users">
+                    <div class="row g-4">
+                        <div class="col-md-5">
+                            <div class="card p-4">
+                                <h4 class="h5 mb-3 text-info"><i class="bi bi-person-plus me-2"></i>Register User Entity</h4>
+                                <form id="form-user" onsubmit="handleCreateUser(event)">
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Username</label>
+                                        <input type="text" id="user-username" class="form-control bg-dark text-white border-secondary" placeholder="e.g. john_doe" required minlength="3">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Email Address</label>
+                                        <input type="email" id="user-email" class="form-control bg-dark text-white border-secondary" placeholder="e.g. john@company.com" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Full Name</label>
+                                        <input type="text" id="user-fullname" class="form-control bg-dark text-white border-secondary" placeholder="e.g. John Doe" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Role</label>
+                                        <select id="user-role" class="form-select bg-dark text-white border-secondary">
+                                            <option value="user">User</option>
+                                            <option value="developer">Developer</option>
+                                            <option value="admin">Admin</option>
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100"><i class="bi bi-check-circle me-1"></i>Add to Repository</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="col-md-7">
+                            <div class="card p-4">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h4 class="h5 text-info mb-0"><i class="bi bi-list-ul me-2"></i>Repository Users</h4>
+                                    <select id="filter-role" onchange="loadUsers()" class="form-select bg-dark text-white border-secondary w-auto form-select-sm">
+                                        <option value="">All Roles</option>
+                                        <option value="admin">Admin</option>
+                                        <option value="developer">Developer</option>
+                                        <option value="user">User</option>
+                                    </select>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-dark table-hover align-middle">
+                                        <thead>
+                                            <tr>
+                                                <th>Username</th>
+                                                <th>Full Name</th>
+                                                <th>Email</th>
+                                                <th>Role</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="users-table-body">
+                                            <tr><td colspan="4" class="text-center text-secondary">Loading users...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: DOCUMENTS -->
+                <div class="tab-pane fade" id="tab-docs">
+                    <div class="row g-4">
+                        <div class="col-md-5">
+                            <div class="card p-4">
+                                <h4 class="h5 mb-3 text-info"><i class="bi bi-file-earmark-plus me-2"></i>Create Document</h4>
+                                <form id="form-doc" onsubmit="handleCreateDoc(event)">
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Author User ID</label>
+                                        <input type="text" id="doc-author" class="form-control bg-dark text-white border-secondary" placeholder="Enter User UUID or System ID" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Document Title</label>
+                                        <input type="text" id="doc-title" class="form-control bg-dark text-white border-secondary" placeholder="e.g. Architecture Overview" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label small text-secondary">Content Body</label>
+                                        <textarea id="doc-content" class="form-control bg-dark text-white border-secondary" rows="3" placeholder="Document body description..."></textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100"><i class="bi bi-save me-1"></i>Create Document</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="col-md-7">
+                            <div class="card p-4">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h4 class="h5 text-info mb-0"><i class="bi bi-search me-2"></i>Specification Search</h4>
+                                    <input type="text" id="doc-search" oninput="loadDocuments()" class="form-control bg-dark text-white border-secondary w-50 form-control-sm" placeholder="Search titles by keyword...">
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-dark table-hover align-middle">
+                                        <thead>
+                                            <tr>
+                                                <th>Title</th>
+                                                <th>Author ID</th>
+                                                <th>Status</th>
+                                                <th>Created</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="docs-table-body">
+                                            <tr><td colspan="4" class="text-center text-secondary">Loading documents...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: UNIT OF WORK -->
+                <div class="tab-pane fade" id="tab-uow">
+                    <div class="card p-4">
+                        <h4 class="h5 text-warning mb-3"><i class="bi bi-arrow-repeat me-2"></i>Unit of Work (UoW) Transaction Controller</h4>
+                        <p class="text-secondary small">Demonstrates atomic multi-repository operations. Standard context exits commit all changes automatically, while unhandled exceptions rollback all staged entities cleanly.</p>
+                        
+                        <div class="d-flex gap-3 mb-4">
+                            <button onclick="runUoWTransaction(true)" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>Execute Successful Transaction (Commit)</button>
+                            <button onclick="runUoWTransaction(false)" class="btn btn-danger"><i class="bi bi-x-circle me-1"></i>Simulate Failed Transaction (Rollback)</button>
+                        </div>
+
+                        <h6 class="text-secondary">Transaction Execution Log:</h6>
+                        <pre id="uow-log" class="telemetry-output">// Click a transaction button above to observe Unit of Work commit/rollback behavior...</pre>
+                    </div>
+                </div>
+
+                <!-- TAB 4: MULTI-ENGINE DEMO -->
+                <div class="tab-pane fade" id="tab-engines">
+                    <div class="card p-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div>
+                                <h4 class="h5 text-success mb-1"><i class="bi bi-hdd-network me-2"></i>Multi-Engine Live Storage Test</h4>
+                                <p class="text-secondary small mb-0">Executes queries simultaneously across Memory, Atomic JSON File, and SQLite storage engines.</p>
+                            </div>
+                            <button onclick="runMultiEngineDemo()" class="btn btn-success"><i class="bi bi-play-fill me-1"></i>Run Live Engine Tests</button>
+                        </div>
+                        <pre id="engine-log" class="telemetry-output">// Click "Run Live Engine Tests" to trigger multi-engine operations...</pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audit Logs Section -->
+            <div class="card p-4 mt-4">
+                <h4 class="h5 text-white mb-3"><i class="bi bi-journal-text me-2"></i>System Audit Log Telemetry</h4>
+                <div class="table-responsive">
+                    <table class="table table-dark table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Action</th>
+                                <th>Entity</th>
+                                <th>Actor</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audits-table-body">
+                            <tr><td colspan="5" class="text-center text-secondary">Loading audit records...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+        <script>
+            async function fetchJSON(url, options = {}) {
+                const res = await fetch(url, options);
+                return await res.json();
+            }
+
+            async function refreshDashboard() {
+                loadStats();
+                loadUsers();
+                loadDocuments();
+                loadAudits();
+            }
+
+            async function loadStats() {
+                try {
+                    const stats = await fetchJSON('/api/stats');
+                    const cache = await fetchJSON('/api/cache-stats');
+                    document.getElementById('stat-users').innerText = stats.total_users || 0;
+                    document.getElementById('stat-docs').innerText = stats.total_documents || 0;
+                    document.getElementById('stat-audits').innerText = stats.total_audit_logs || 0;
+                    document.getElementById('stat-cache').innerText = cache.hit_ratio_percent + '%';
+                } catch(e) { console.error(e); }
+            }
+
+            async function loadUsers() {
+                const role = document.getElementById('filter-role').value;
+                const url = role ? `/api/users?role=${role}` : '/api/users';
+                try {
+                    const users = await fetchJSON(url);
+                    const tbody = document.getElementById('users-table-body');
+                    if (!users.length) {
+                        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No users found</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = users.map(u => `
+                        <tr>
+                            <td><code>${u.username}</code></td>
+                            <td>${u.full_name}</td>
+                            <td>${u.email}</td>
+                            <td><span class="badge bg-${u.role === 'admin' ? 'danger' : u.role === 'developer' ? 'info' : 'secondary'}">${u.role}</span></td>
+                        </tr>
+                    `).join('');
+                } catch(e) { console.error(e); }
+            }
+
+            async function handleCreateUser(e) {
+                e.preventDefault();
+                const payload = {
+                    username: document.getElementById('user-username').value,
+                    email: document.getElementById('user-email').value,
+                    full_name: document.getElementById('user-fullname').value,
+                    role: document.getElementById('user-role').value
+                };
+                try {
+                    await fetchJSON('/api/users', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    document.getElementById('form-user').reset();
+                    refreshDashboard();
+                } catch(err) { alert("Error creating user: " + err); }
+            }
+
+            async function loadDocuments() {
+                const query = document.getElementById('doc-search').value;
+                const url = query ? `/api/documents?query=${encodeURIComponent(query)}` : '/api/documents';
+                try {
+                    const docs = await fetchJSON(url);
+                    const tbody = document.getElementById('docs-table-body');
+                    if (!docs.length) {
+                        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No documents found</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = docs.map(d => `
+                        <tr>
+                            <td><strong>${d.title}</strong></td>
+                            <td><code>${d.author_id.substring(0, 8)}...</code></td>
+                            <td><span class="badge bg-${d.status === 'published' ? 'success' : 'warning'}">${d.status}</span></td>
+                            <td class="small text-secondary">${new Date(d.created_at).toLocaleTimeString()}</td>
+                        </tr>
+                    `).join('');
+                } catch(e) { console.error(e); }
+            }
+
+            async function handleCreateDoc(e) {
+                e.preventDefault();
+                const payload = {
+                    author_id: document.getElementById('doc-author').value,
+                    title: document.getElementById('doc-title').value,
+                    content: document.getElementById('doc-content').value,
+                    tags: ["web", "dashboard"]
+                };
+                try {
+                    await fetchJSON('/api/documents', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    document.getElementById('form-doc').reset();
+                    refreshDashboard();
+                } catch(err) { alert("Error creating document: " + err); }
+            }
+
+            async function loadAudits() {
+                try {
+                    const logs = await fetchJSON('/api/audits');
+                    const tbody = document.getElementById('audits-table-body');
+                    if (!logs.length) {
+                        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-secondary">No audit logs recorded</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = logs.map(l => `
+                        <tr>
+                            <td class="small text-secondary">${new Date(l.created_at).toLocaleString()}</td>
+                            <td><span class="badge bg-${l.action === 'CREATE' ? 'success' : 'info'}">${l.action}</span></td>
+                            <td><code>${l.entity_name}</code></td>
+                            <td>${l.performed_by}</td>
+                            <td class="small text-info">${JSON.stringify(l.details)}</td>
+                        </tr>
+                    `).join('');
+                } catch(e) { console.error(e); }
+            }
+
+            async function runUoWTransaction(success) {
+                const log = document.getElementById('uow-log');
+                log.innerText = `[${new Date().toLocaleTimeString()}] Executing Unit of Work transaction (Success=${success})...`;
+                try {
+                    const res = await fetchJSON(`/api/demo`);
+                    log.innerText = `[${new Date().toLocaleTimeString()}] Unit of Work Execution Result:\\n` + JSON.stringify(res, null, 2);
+                    refreshDashboard();
+                } catch(e) { log.innerText = "Error: " + e; }
+            }
+
+            async function runMultiEngineDemo() {
+                const log = document.getElementById('engine-log');
+                log.innerText = "Executing Multi-Engine storage operations across Memory, JSON File (/tmp), and SQLite (/tmp)...";
+                try {
+                    const res = await fetchJSON('/api/demo');
+                    log.innerText = JSON.stringify(res, null, 2);
+                } catch(e) { log.innerText = "Error: " + e; }
+            }
+
+            document.addEventListener('DOMContentLoaded', refreshDashboard);
+        </script>
     </body>
     </html>
     """
@@ -203,14 +530,12 @@ async def home_dashboard():
 
 @app.get("/api/stats")
 async def get_stats():
-    """Retrieve summary metrics across repositories."""
     await ensure_seeded()
     return await service.get_summary_stats()
 
 
 @app.get("/api/cache-stats")
 async def get_cache_stats():
-    """Retrieve caching hit/miss performance statistics."""
     await ensure_seeded()
     return {
         "hits": cached_user_repo.hits,
@@ -221,7 +546,6 @@ async def get_cache_stats():
 
 @app.get("/api/users")
 async def list_users(role: Optional[str] = None):
-    """List users filtered by role using Specification query builder."""
     await ensure_seeded()
     spec = Specification()
     if role:
@@ -232,7 +556,6 @@ async def list_users(role: Optional[str] = None):
 
 @app.post("/api/users", status_code=201)
 async def create_user(payload: CreateUserRequest):
-    """Register a new user entity."""
     await ensure_seeded()
     try:
         user = await service.register_user(
@@ -253,7 +576,6 @@ async def search_documents(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0)
 ):
-    """Search documents using flexible specification query builder."""
     await ensure_seeded()
     docs = await service.search_documents(query=query, status=status, limit=limit, offset=offset)
     return [d.to_dict() for d in docs]
@@ -261,7 +583,6 @@ async def search_documents(
 
 @app.post("/api/documents", status_code=201)
 async def create_document(payload: CreateDocumentRequest):
-    """Create a new document."""
     await ensure_seeded()
     doc = await service.create_document(
         author_id=payload.author_id,
@@ -274,7 +595,6 @@ async def create_document(payload: CreateDocumentRequest):
 
 @app.get("/api/audits")
 async def get_audit_logs():
-    """Retrieve system audit logs."""
     await ensure_seeded()
     logs = await audit_repo.list_all()
     return [log.to_dict() for log in logs]
@@ -282,7 +602,6 @@ async def get_audit_logs():
 
 @app.get("/api/demo")
 async def run_live_demo():
-    """Execute live multi-engine test scenario across SQLite, JSON File, and Memory stores."""
     results = []
 
     # 1. JSON File Engine in /tmp
@@ -305,6 +624,6 @@ async def run_live_demo():
 
     return {
         "status": "success",
-        "message": "All Multi-Engine Data Access Layer operations executed cleanly on Vercel.",
+        "message": "All Multi-Engine Data Access Layer operations executed cleanly.",
         "engines_telemetry": results
     }
