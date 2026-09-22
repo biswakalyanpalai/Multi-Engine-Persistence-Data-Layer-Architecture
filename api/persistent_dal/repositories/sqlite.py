@@ -1,5 +1,5 @@
 """
-Asynchronous SQLite Relational Repository Driver
+Asynchronous relational SQLite persistence driver using aiosqlite
 """
 
 import json
@@ -7,7 +7,11 @@ import sqlite3
 from pathlib import Path
 from typing import Type, TypeVar, List, Optional, Union, Any
 from uuid import UUID
-import aiosqlite
+
+try:
+    import aiosqlite
+except ImportError:
+    aiosqlite = None
 
 from ..models.base import BaseEntity
 from ..query.specification import Specification, FilterOperator, SortOrder
@@ -19,11 +23,12 @@ T = TypeVar("T", bound=BaseEntity)
 class SQLiteRepository(AbstractRepository[T]):
     """
     Asynchronous relational SQLite persistence driver using aiosqlite.
-    Stores entities using a hybrid Relational + JSON Document approach
-    allowing schema flexibility with relational query performance.
+    Stores entities using a hybrid Relational + JSON Document approach.
     """
 
     def __init__(self, entity_class: Type[T], db_path: Union[str, Path]):
+        if aiosqlite is None:
+            raise ImportError("aiosqlite module is not available in this environment.")
         self.entity_class = entity_class
         self.db_path = str(db_path)
         self.table_name = f"{entity_class.__name__.lower()}s"
@@ -119,7 +124,6 @@ class SQLiteRepository(AbstractRepository[T]):
 
     async def find(self, spec: Specification) -> List[T]:
         await self._init_db()
-        # Fetch records and evaluate criteria
         async with aiosqlite.connect(self.db_path) as db:
             query = f"SELECT id, created_at, updated_at, is_deleted, payload FROM {self.table_name}"
             conditions = []
@@ -138,7 +142,6 @@ class SQLiteRepository(AbstractRepository[T]):
 
         entities = [self._row_to_entity(row) for row in rows]
 
-        # Apply Specification filtering, sorting, and pagination
         from .memory import MemoryRepository
         mem_repo = MemoryRepository(self.entity_class)
         return mem_repo._apply_spec(entities, spec)
@@ -151,7 +154,6 @@ class SQLiteRepository(AbstractRepository[T]):
         await self._init_db()
         key = str(entity.id)
         async with aiosqlite.connect(self.db_path) as db:
-            # Verify existence
             async with db.execute(f"SELECT id FROM {self.table_name} WHERE id = ?", (key,)) as cursor:
                 if not await cursor.fetchone():
                     raise KeyError(f"Entity with ID '{key}' does not exist in SQLite table '{self.table_name}'.")
