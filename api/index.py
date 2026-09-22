@@ -5,6 +5,7 @@ Vercel Serverless Entrypoint for Multi-Engine Persistent Data Layer
 import sys
 import os
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -15,7 +16,7 @@ for d in [str(api_dir), str(root_dir)]:
     if d not in sys.path:
         sys.path.insert(0, d)
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -35,7 +36,7 @@ try:
         DataService,
         UnitOfWork,
     )
-except ImportError:
+except Exception:
     from api.persistent_dal import (
         MemoryRepository,
         JSONFileRepository,
@@ -95,6 +96,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler capturing runtime errors for diagnostic telemetry."""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc()
+        }
+    )
 
 
 class CreateUserRequest(BaseModel):
